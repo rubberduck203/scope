@@ -93,6 +93,7 @@ fn report_result(status: &AnalyzeStatus) {
             info!(target: "always", "No automatic fix available")
         }
         AnalyzeStatus::KnownErrorFoundUserDenied => warn!(target: "always", "User denied fix"),
+        AnalyzeStatus::KnownErrorFoundNoTTY => warn!(target: "always", "No TTY available for user prompt"),
         AnalyzeStatus::KnownErrorFoundFixFailed => error!(target: "always", "Fix failed"),
         AnalyzeStatus::KnownErrorFoundFixSucceeded => info!(target: "always", "Fix succeeded"),
     }
@@ -169,32 +170,45 @@ async fn prompt_and_run_fix(
         }
     };
 
-    if prompt.prompt().unwrap() {
-        let outputs = run_fix(working_dir, &exec_path, fix).await?;
-        // failure indicates an issue with us actually executing it,
-        // not the success/failure of the command itself.
-        let max_exit_code = outputs
-            .iter()
-            .map(|c| c.exit_code.unwrap_or(-1))
-            .max()
-            .unwrap();
-
-        match max_exit_code {
-            0 => Ok(AnalyzeStatus::KnownErrorFoundFixSucceeded),
-            _ => {
-                if let Some(help_text) = &fix.help_text {
-                    error!(target: "user", "Fix Help: {}", help_text);
+    // FIXME: this will fail if there's not TTY
+    // which makes writing bats tests for known-errors difficult
+    match prompt.prompt() {
+        Ok(user_said_yes) => {
+            if user_said_yes {
+                let outputs = run_fix(working_dir, &exec_path, fix).await?;
+                // failure indicates an issue with us actually executing it,
+                // not the success/failure of the command itself.
+                let max_exit_code = outputs
+                    .iter()
+                    .map(|c| c.exit_code.unwrap_or(-1))
+                    .max()
+                    .unwrap();
+        
+                match max_exit_code {
+                    0 => Ok(AnalyzeStatus::KnownErrorFoundFixSucceeded),
+                    _ => {
+                        if let Some(help_text) = &fix.help_text {
+                            error!(target: "user", "Fix Help: {}", help_text);
+                        }
+                        if let Some(help_url) = &fix.help_url {
+                            error!(target: "user", "For more help, please visit {}", help_url);
+                        }
+        
+                        Ok(AnalyzeStatus::KnownErrorFoundFixFailed)
+                    }
                 }
-                if let Some(help_url) = &fix.help_url {
-                    error!(target: "user", "For more help, please visit {}", help_url);
-                }
-
-                Ok(AnalyzeStatus::KnownErrorFoundFixFailed)
+            } else {
+                Ok(AnalyzeStatus::KnownErrorFoundUserDenied)
             }
         }
-    } else {
-        Ok(AnalyzeStatus::KnownErrorFoundUserDenied)
+        Err(err) => {
+            match err{
+                inquire::InquireError::NotTTY =>  Ok(AnalyzeStatus::KnownErrorFoundNoTTY),
+                e=> Err(e.into()),
+            }
+        }
     }
+
 }
 
 async fn run_fix(
@@ -258,6 +272,7 @@ enum AnalyzeStatus {
     KnownErrorFoundUserDenied,
     KnownErrorFoundFixFailed,
     KnownErrorFoundFixSucceeded,
+    KnownErrorFoundNoTTY,
 }
 
 impl AnalyzeStatus {
