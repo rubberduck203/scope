@@ -290,6 +290,8 @@ impl DefaultDoctorActionRun {
             return Ok((fix_result, fix_output));
         }
 
+        //FIXME: we want to trace the fact that we're self healing and whether it succeeded or not
+
         let analyze_status = self.analyze_known_errors(&fix_output).await?;
         analyze::report_result(&analyze_status);
 
@@ -651,6 +653,7 @@ impl DefaultDoctorActionRun {
         })
     }
 
+    #[instrument(skip(self, fix_output), ret)]
     async fn analyze_known_errors(&self, fix_output: &[ActionTaskReport]) -> Result<AnalyzeStatus> {
         let lines = fix_output
             .iter()
